@@ -14,7 +14,7 @@ import { formatCostFull, formatNumber, formatNumberFull } from "./utils/format";
 import { getAntigravityDisplayName } from "./antigravity-models";
 import type { WrappedStats } from "./types";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 
 function printHelp() {
   console.log(`
