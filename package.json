@@ -1,0 +1,54 @@
+{
+  "name": "agy-wrapped",
+  "version": "0.1.0",
+  "author": {
+    "name": "xiaoqianWX"
+  },
+  "description": "Generate a personalized Spotify Wrapped-style summary of your Google Antigravity usage",
+  "homepage": "https://github.com/xiaoqianWX/agy-wrapped",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xiaoqianWX/agy-wrapped.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xiaoqianWX/agy-wrapped/issues"
+  },
+  "keywords": [
+    "antigravity",
+    "agy",
+    "google-antigravity",
+    "gemini",
+    "wrapped",
+    "agy-wrapped"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "agy-wrapped": "bin/agy-wrapped.mjs"
+  },
+  "scripts": {
+    "start": "bun src/index.ts",
+    "dev": "bun run --watch src/index.ts",
+    "test": "bun test",
+    "build": "tsgo --noEmit && bun run scripts/build.ts",
+    "publish": "bun run scripts/publish.ts",
+    "release": "semantic-release",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.11.0",
+    "@resvg/resvg-wasm": "^2.6.2",
+    "react": "^19.2.3",
+    "satori": "^0.18.3"
+  },
+  "devDependencies": {
+    "@semantic-release/exec": "^7.1.0",
+    "@semantic-release/git": "^10.0.1",
+    "@types/bun": "latest",
+    "@types/react": "^19.2.7",
+    "@typescript/native-preview": "^7.0.0-dev.20251223.1",
+    "bunup": "^0.16.10",
+    "semantic-release": "^25.0.2",
+    "typescript": "^5.0.0"
+  }
+}
