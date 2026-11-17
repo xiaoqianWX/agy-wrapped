@@ -13,8 +13,12 @@ import { isWrappedAvailable } from "./utils/dates";
 import { formatCostFull, formatNumber, formatNumberFull } from "./utils/format";
 import { getAntigravityDisplayName } from "./antigravity-models";
 import type { WrappedStats } from "./types";
+import { loadFonts } from "./image/fonts";
+import { buildDashboardPayload, DASHBOARD_PACKAGE } from "./web/adapter";
+import { openExternal, writeDashboard } from "./web/open";
+import { renderDashboardHtml } from "./web/render";
 
-const VERSION = "0.1.1";
+const VERSION = "0.2.0";
 
 function printHelp() {
   console.log(`
@@ -27,6 +31,7 @@ USAGE:
 
 OPTIONS:
   --year <YYYY>    Generate wrapped for a specific year (default: current year)
+  --web, -w        Open an interactive dashboard in your browser instead of the card
   --help, -h       Show this help message
   --version, -v    Show version number
 
@@ -36,6 +41,7 @@ ENVIRONMENT:
 EXAMPLES:
   agy-wrapped              # Generate current year wrapped
   agy-wrapped --year 2026  # Generate 2026 wrapped
+  agy-wrapped --web        # Explore your usage in the browser
 `);
 }
 
@@ -44,6 +50,7 @@ async function main() {
     args: process.argv.slice(2),
     options: {
       year: { type: "string", short: "y" },
+      web: { type: "boolean", short: "w" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
     },
@@ -81,6 +88,11 @@ async function main() {
     p.cancel(
       "Antigravity conversation data not found in ~/.gemini/antigravity/conversations\n\nMake sure you have used Antigravity at least once, or set ANTIGRAVITY_DATA_DIR."
     );
+    process.exit(0);
+  }
+
+  if (values.web) {
+    await runDashboard(requestedYear);
     process.exit(0);
   }
 
@@ -191,7 +203,7 @@ async function main() {
 
   if (!p.isCancel(shouldShare) && shouldShare) {
     const tweetUrl = generateTweetUrl(stats);
-    const opened = await openUrl(tweetUrl);
+    const opened = await openExternal(tweetUrl);
     if (opened) {
       p.log.success("Opened X in your browser.");
     } else {
@@ -231,20 +243,30 @@ function generateTweetUrl(stats: WrappedStats): string {
   return url.toString();
 }
 
-async function openUrl(url: string): Promise<boolean> {
-  const platform = process.platform;
-  const command = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open";
-
+async function runDashboard(year: number) {
+  const spinner = p.spinner();
+  spinner.start("Scanning your Antigravity history...");
+  let html: string;
   try {
-    const proc = Bun.spawn([command, url], {
-      stdout: "ignore",
-      stderr: "ignore",
-    });
-    await proc.exited;
-    return proc.exitCode === 0;
-  } catch {
-    return false;
+    const payload = await buildDashboardPayload(year);
+    if (payload.usage.length === 0 && payload.prompts.length === 0) {
+      spinner.stop("No data found");
+      p.cancel("No Antigravity activity found in your conversation databases.");
+      return;
+    }
+    const fonts = (await loadFonts()).map((font) => ({ weight: Number(font.weight), data: font.data as ArrayBuffer }));
+    html = renderDashboardHtml(payload, fonts);
+    spinner.stop(`Found ${formatNumber(payload.sessions.length)} conversations`);
+  } catch (error) {
+    spinner.stop("Failed to build the dashboard");
+    p.cancel(`Error: ${error}`);
+    process.exit(1);
   }
+
+  const path = await writeDashboard(DASHBOARD_PACKAGE, year, html);
+  p.log.success(`Dashboard saved to ${path}`);
+  const opened = await openExternal(path);
+  p.outro(opened ? "Opened in your browser." : "Open that file in your browser.");
 }
 
 main().catch((error) => {

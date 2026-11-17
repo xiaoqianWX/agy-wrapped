@@ -36,6 +36,7 @@ const DEFAULT_ROOTS = [
   ".config/antigravity",
 ];
 const USER_INPUT_STEP_TYPE = 14;
+const SUMMARIES_FILE = "conversation_summaries.db";
 
 export interface AntigravityUsageEvent {
   sessionId: string;
@@ -53,9 +54,22 @@ export interface AntigravityUsageEvent {
 export interface ConversationInfo {
   id: string;
   createdAt: number;
+  // Latest step time seen (createdAt when no step has one).
+  endedAt: number;
   workspace?: string;
+  // From the data root's conversation_summaries.db, when present.
+  title?: string;
+  // Text of the earliest user message, for untitled conversations.
+  firstPrompt?: string;
   userMessageTimes: number[];
+  toolCalls: ToolCallInfo[];
   stepCount: number;
+}
+
+export interface ToolCallInfo {
+  id: string;
+  name: string;
+  timestamp: number;
 }
 
 export interface AntigravityUsageData {
@@ -116,10 +130,11 @@ async function isDirectory(path: string): Promise<boolean> {
   }
 }
 
-async function listConversationFiles(): Promise<{ databases: string[]; encrypted: string[] }> {
+async function listConversationFiles(): Promise<{ databases: string[]; encrypted: string[]; summaries: string[] }> {
   const { roots, custom } = getDataRoots();
   const databases: string[] = [];
   const encrypted: string[] = [];
+  const summaries: string[] = [];
   const seen = new Set<string>();
 
   for (const root of roots) {
@@ -131,6 +146,9 @@ async function listConversationFiles(): Promise<{ databases: string[]; encrypted
       dir = root;
     } else {
       continue;
+    }
+    for (const candidate of new Set([join(root, SUMMARIES_FILE), join(dir, SUMMARIES_FILE)])) {
+      if (await isFile(candidate)) summaries.push(candidate);
     }
 
     let entries: string[];
@@ -150,7 +168,43 @@ async function listConversationFiles(): Promise<{ databases: string[]; encrypted
     }
   }
 
-  return { databases: databases.sort(), encrypted: encrypted.sort() };
+  return { databases: databases.sort(), encrypted: encrypted.sort(), summaries };
+}
+
+async function isFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Conversation titles from conversation_summaries.db (`title`, else the generated `preview`). */
+function readTitles(paths: string[]): Map<string, string> {
+  const titles = new Map<string, string>();
+  for (const path of paths) {
+    try {
+      const db = new Database(path, { readonly: true });
+      try {
+        if (!tableExists(db, "conversation_summaries")) continue;
+        const rows = db.query("SELECT conversation_id AS id, title, preview FROM conversation_summaries").all() as Array<{
+          id: unknown;
+          title: unknown;
+          preview: unknown;
+        }>;
+        for (const row of rows) {
+          if (typeof row.id !== "string" || titles.has(row.id)) continue;
+          const title = [row.title, row.preview].find((value) => typeof value === "string" && value.trim() !== "");
+          if (typeof title === "string") titles.set(row.id, title.trim());
+        }
+      } finally {
+        db.close();
+      }
+    } catch {
+      // Optional metadata; ignore unreadable or locked files.
+    }
+  }
+  return titles;
 }
 
 export async function checkAntigravityDataExists(): Promise<boolean> {
@@ -159,7 +213,7 @@ export async function checkAntigravityDataExists(): Promise<boolean> {
 }
 
 export async function collectAntigravityUsageData(): Promise<AntigravityUsageData> {
-  const { databases, encrypted } = await listConversationFiles();
+  const { databases, encrypted, summaries } = await listConversationFiles();
   const candidates: Candidate[] = [];
   const conversations = new Map<string, ConversationInfo>();
   const unreadableDatabases: string[] = [];
@@ -175,6 +229,11 @@ export async function collectAntigravityUsageData(): Promise<AntigravityUsageDat
     if (!parsed) continue;
     candidates.push(...parsed.candidates);
     mergeConversation(conversations, parsed.conversation);
+  }
+
+  const titles = readTitles(summaries);
+  for (const conversation of conversations.values()) {
+    conversation.title = titles.get(conversation.id) ?? conversation.title;
   }
 
   const readableIds = new Set(conversations.keys());
@@ -204,7 +263,9 @@ function mergeConversation(map: Map<string, ConversationInfo>, next: Conversatio
   map.set(next.id, {
     ...keep,
     createdAt: Math.min(existing.createdAt, next.createdAt),
+    endedAt: Math.max(existing.endedAt, next.endedAt),
     workspace: keep.workspace ?? existing.workspace ?? next.workspace,
+    firstPrompt: keep.firstPrompt ?? existing.firstPrompt ?? next.firstPrompt,
   });
 }
 
@@ -283,10 +344,20 @@ async function readConversation(db: Database, path: string): Promise<ParsedDatab
   const userMessageTimes: number[] = [];
   let stepCount = 0;
 
-  type StepRow = { idx: number; step_type: number; metadata: unknown };
+  type StepRow = { idx: number; step_type: number; metadata: unknown; payload?: unknown };
+  const hasPayload =
+    hasSteps && (db.query("PRAGMA table_info(steps)").all() as Array<{ name: string }>).some((c) => c.name === "step_payload");
   const stepRows = hasSteps
-    ? (db.query("SELECT idx, step_type, metadata FROM steps ORDER BY idx").all() as StepRow[])
+    ? (db
+        .query(
+          hasPayload
+            ? `SELECT idx, step_type, metadata, CASE WHEN step_type = ${USER_INPUT_STEP_TYPE} THEN step_payload END AS payload FROM steps ORDER BY idx`
+            : "SELECT idx, step_type, metadata FROM steps ORDER BY idx"
+        )
+        .all() as StepRow[])
     : [];
+  const toolCalls: ToolCallInfo[] = [];
+  let firstPrompt: { time: number; text: string } | undefined;
 
   type GenRow = { idx: number; data: unknown };
   const genRows = hasGenerations
@@ -314,6 +385,16 @@ async function readConversation(db: Database, path: string): Promise<ParsedDatab
     stepCount++;
     if (row.step_type === USER_INPUT_STEP_TYPE) {
       userMessageTimes.push(time ?? fallbackTime);
+      // The typed text is in payload field 19.2 (19.3.1 holds a copy).
+      const input = getMessage(tryDecode(toBytes(row.payload)), 19) ?? [];
+      const text = (getString(input, 2) ?? getString(getMessage(input, 3) ?? [], 1))?.trim();
+      if (text && (!firstPrompt || (time ?? fallbackTime) < firstPrompt.time)) firstPrompt = { time: time ?? fallbackTime, text };
+    }
+    // Tool steps carry the call in metadata field 4: {1: call id, 2: tool name}.
+    const call = getMessage(fields, 4);
+    const toolName = call ? getString(call, 2) : undefined;
+    if (call && toolName) {
+      toolCalls.push({ id: getString(call, 1) ?? `step:${row.idx}`, name: toolName, timestamp: time ?? fallbackTime });
     }
 
     const info = getMessage(fields, 24) ?? [];
@@ -368,12 +449,16 @@ async function readConversation(db: Database, path: string): Promise<ParsedDatab
     });
   }
 
+  const started = createdAt ?? stepTimes.get(0) ?? fileTime;
   return {
     conversation: {
       id: sessionId,
-      createdAt: createdAt ?? stepTimes.get(0) ?? fileTime,
+      createdAt: started,
+      endedAt: Array.from(stepTimes.values()).reduce((max, value) => Math.max(max, value), started),
       workspace,
+      firstPrompt: firstPrompt?.text,
       userMessageTimes,
+      toolCalls,
       stepCount,
     },
     candidates,

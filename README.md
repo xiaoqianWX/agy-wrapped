@@ -51,11 +51,12 @@ agy-wrapped
 
 ## Usage Options
 
-| Option          | Description                          |
-| --------------- | ------------------------------------ |
-| `--year, -y`    | Generate wrapped for a specific year |
-| `--help, -h`    | Show help message                    |
-| `--version, -v` | Show version number                  |
+| Option          | Description                                        |
+| --------------- | -------------------------------------------------- |
+| `--year, -y`    | Generate wrapped for a specific year               |
+| `--web, -w`     | Open the interactive dashboard instead of the card |
+| `--help, -h`    | Show help message                                  |
+| `--version, -v` | Show version number                                |
 
 Set `ANTIGRAVITY_DATA_DIR` (comma-separated) to read data directories other than the defaults below.
 
@@ -89,6 +90,12 @@ The tool generates:
 1. **Terminal Summary** — Quick stats overview in your terminal
 2. **PNG Image** — A beautiful, shareable wrapped card saved to your home directory
 3. **Clipboard** — Automatically copies the image to your clipboard
+
+### Interactive dashboard
+
+`npx agy-wrapped --web` writes a single self-contained HTML file to your temp folder and opens it. It works offline and loads nothing from the internet. Click a day, week, model or project to filter everything else; shift-click days to pick a range; click a conversation to see its per-model breakdown. Filters are kept in the URL, so a reload keeps your view.
+
+The page shows activity by day and week, models with token and cost breakdowns, workspaces, conversations with their Antigravity titles, tools the agent called, and when in the week you work. "Prompts" are messages you typed; "requests" are model responses.
 
 ## Data Source
 
